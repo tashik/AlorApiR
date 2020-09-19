@@ -5,44 +5,63 @@ library(uuid)
 source("RpcClient.R")
 
 alor.WsURL <<- "wss://api.alor.ru/ws"
+ws <<- WebSocket$new(alor.WsURL)
 
 # ----------------
 # Клиент для Websocket API
+#
+# @param vector tickers, i.e c("RTS-12.20", "Si-12.20")
 # ----------------
-StartSocket <- function() {
-  ws <- WebSocket$new(alor.WsURL)
+StartSocket <- function(tickers) {
   token <- GetToken() # получаем токен доступа
-  GuidQuotes <<- uuid::UUIDgenerate() # генерим идентификатор для будущей подписки на ленту сделок по инструменту
+  
+  tickerGuids <<- list()
+  
+  # Формируем подписки на инструменты
+  for (i in 1:length(tickers)) {
+    GuidQuotes <<- uuid::UUIDgenerate() # генерим идентификатор для будущей подписки на ленту сделок по инструменту
+    ticker <- tickers[i]
+    tickerGuids[GuidQuotes] <<- ticker
+    
+    CurrentQuotes <- list(
+      opcode="AllTradesGetAndSubscribe",
+      code=ticker,
+      delayed="false",
+      exchange="MOEX",
+      format="Simple",
+      guid=GuidQuotes,
+      token=token
+    )
+    
+    CurrentQuotesJson<-toJSON(CurrentQuotes)
+    ws$send(CurrentQuotesJson)
+  }
+  
+  GuidQuotes <<- uuid::UUIDgenerate() 
   
   # Обработчик всех подписок (можно вынести в отдельный метод)
   ws$onMessage(function(event) {
     parsedMessage <- fromJSON(event$data)
     if ("requestGuid" %in% names(parsedMessage)) {
-      if (parsedMessage$requestGuid == GuidQuotes && parsedMessage$message == "Handled successfully")
+      ticker<- tickerGuids[[parsedMessage$requestGuid]]
+      
+      if (!is.na(ticker) && parsedMessage$message == "Handled successfully")
       {
-        print("ws handled quotes subscription successfully")
+        print(paste("ws handled quotes subscription successfully for ticker", ticker, sep=" "))
       }
     }
     
     if ("guid" %in% names(parsedMessage) && parsedMessage$guid == GuidQuotes) {
+      ticker<- tickerGuids[[parsedMessage$guid]] # так можно вытащить тикер из нашего списка, не разбирая сообщение
       # тут нужно вызвать метод обработки и сохранения (если нужно) полученных данных
     }
   })
-  
-  # Инициализация подписок (тут только подписка на ленту сделок по RTS, но подписок может быть сколько угодно и на все, что в документации есть)
-  CurrentQuotes <- list(
-    opcode="AllTradesGetAndSubscribe",
-    code="RTS-9.20",
-    delayed="false",
-    exchange="MOEX",
-    format="Simple",
-    guid=GuidQuotes,
-    token=token
-  )
-  
-  CurrentQuotesJson<-toJSON(CurrentQuotes)
-  ws$send(CurrentQuotesJson)
 }
 
+Stop() <- function() {
+  ws$close()
+}  
+
 # Запуск
-StartSocket()
+tickers <- c("RTS-12.20", "Si-12.20", "BR-10.20")
+StartSocket(tickers)
